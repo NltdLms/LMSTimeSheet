@@ -7,78 +7,81 @@ using System.IO;
 
 namespace LMSTimeSheet
 {
-    static class Program
+    internal static class Program
     {
-        static void Main()
+        private static void Main()
         {
-
             try
             {
-
-                // Connection string 
+                // Connection string
                 var lmsConnection = ConfigurationManager.ConnectionStrings["LMSConnection"].ConnectionString;
                 string msAccessConnection = ConfigurationManager.ConnectionStrings["MSAccessConnection"].ConnectionString;
-                string FetchDateFrom = ConfigurationManager.AppSettings["FetchDateFrom"];
-                WriteLogFile(DateTime.Now + ": Started Processing Timesheet data");
-                Console.WriteLine(DateTime.Now + ": Started Processing Timesheet data");
-                //Get lastUpdated time for processing 
 
-                string lastUpdatedDateTime = CheckTimeSheetLastTime(lmsConnection);
-                if (string.IsNullOrEmpty(lastUpdatedDateTime))
+                WriteLog("Started Processing Timesheet data");
+
+                //Get lastUpdated transaction for processing
+                int lastUpdatedTransaction = CheckTimeSheetLastTransaction(lmsConnection);
+                if (lastUpdatedTransaction == 0)
                 {
-                    lastUpdatedDateTime = FetchDateFrom;
+                    lastUpdatedTransaction = Convert.ToInt32(ConfigurationManager.AppSettings["FetchTransactionFrom"]);
                 }
-                //Get the access Details
 
-                var accessResults = GetMsAccessDetails(msAccessConnection, lastUpdatedDateTime);
+                //Get the access Details
+                var accessResults = GetMsAccessDetails(msAccessConnection, lastUpdatedTransaction);
 
                 //Adding new TimeSheet Details
-
                 if (accessResults.Rows.Count > 0)
                 {
-                    WriteLogFile(DateTime.Now + ": Adding MSAccess " + accessResults.Rows.Count + " rows To LMS DataBase");
-                    Console.WriteLine(DateTime.Now + ": Adding  MSAccess " + accessResults.Rows.Count + " rows To LMS DataBase");
+                    WriteLog("Adding MSAccess " + accessResults.Rows.Count + " rows To LMS Database");
 
                     BulkInsertToTimeSheet(lmsConnection, accessResults);
-                    // reset
-                    WriteLogFile(DateTime.Now + ": Processed MSAccess " + accessResults.Rows.Count + " rows To LMS DataBase");
-                    Console.WriteLine(DateTime.Now + ": Adding  MSAccess " + accessResults.Rows.Count + " rows To LMS DataBase");
+
+                    WriteLog("Processed MSAccess " + accessResults.Rows.Count + " rows To LMS Database");
                 }
                 else
                 {
-                    WriteLogFile(DateTime.Now + ": No MsAccessRecord for Processing Timesheet");
-                    Console.WriteLine(DateTime.Now + ": No MsAccessRecord for Processing Timesheet");
+                    WriteLog("No MsAccessRecord for Processing Timesheet");
                 }
-                WriteLogFile(DateTime.Now + ": Mapping Employee with Timesheet");
-                Console.WriteLine(DateTime.Now + ": Mapping Employee with Timesheet");
+
+                WriteLog("Mapping Employee with Timesheet");
 
                 MapEmployeeWithTimesheet(lmsConnection);
 
-                WriteLogFile(DateTime.Now + ": Processed Timesheet " + accessResults.Rows.Count + " rows");
-                Console.WriteLine(DateTime.Now + ": Processed Timesheet " + accessResults.Rows.Count + " rows");
+                WriteLog("Processed Timesheet " + accessResults.Rows.Count + " rows");
+
                 accessResults.Clear();
-
-
             }
             catch (Exception e)
             {
-
-                Console.WriteLine(DateTime.Now + ": Process failed due to " + e.Message);
-
+                WriteLog("Process failed due to " + e.Message);
             }
         }
 
-        private static string CheckTimeSheetLastTime(string lmsConnection)
+        private static int CheckTimeSheetLastTransaction(string lmsConnection)
         {
-
+            int lastUpdatedTransaction;
             SqlConnection conn = new SqlConnection(lmsConnection);
+
             conn.Open();
-            SqlCommand comm = new SqlCommand("SELECT  MAX(INOUTDATE) FROM ACCESSTRANSACTIONS ", conn);
-            var lastUpdatedTime = comm.ExecuteScalar();
+
+            SqlCommand comm = new SqlCommand("SELECT MAX(AccessTransactionID) FROM ACCESSTRANSACTIONS ", conn);
+            object result = comm.ExecuteScalar();
+
             conn.Close();
             conn.Dispose();
-            return lastUpdatedTime.ToString();
+
+            if (result == null || result == DBNull.Value)
+            {
+                lastUpdatedTransaction = 0;
+            }
+            else
+            {
+                lastUpdatedTransaction = Convert.ToInt32(result);
+            }
+
+            return lastUpdatedTransaction;
         }
+
         private static void MapEmployeeWithTimesheet(string lmsConnection)
         {
             using (SqlConnection con = new SqlConnection(lmsConnection))
@@ -94,31 +97,19 @@ namespace LMSTimeSheet
             }
         }
 
-
-        private static DataTable GetMsAccessDetails(string msAccessConnection, string lastUpdatedDateTime)
+        private static DataTable GetMsAccessDetails(string msAccessConnection, int lastUpdatedTransaction)
         {
-            WriteLogFile(DateTime.Now + ": Processing MsAccessDetails");
-            Console.WriteLine(DateTime.Now + ": Processing MsAccessDetails");
+            WriteLog("Processing MsAccessDetails");
+
             DataTable accessResults = new DataTable();
             using (OleDbConnection conn = new OleDbConnection(msAccessConnection))
             {
-                var strSqLquery = "SELECT  Trans.Tid,Trans.CARDID, Trans.Dt, CBool(Trans.InOut)  FROM Trans";
+                string strSqlquery = "";
 
+                WriteLog("Processing transactions from " + lastUpdatedTransaction + " onwards from MSAccess Database");
+                strSqlquery = "SELECT Trans.Tid, Trans.CARDID, Trans.Dt, CBool(Trans.InOut), NULL, Trans.Tid FROM Trans WHERE Trans.Tid > " + lastUpdatedTransaction;
 
-                if (!string.IsNullOrEmpty(lastUpdatedDateTime))
-                {
-                    WriteLogFile(DateTime.Now + ": Processing " + lastUpdatedDateTime + " onwards data from MSAccess DataBase");
-                    Console.WriteLine(DateTime.Now + ": Processing " + lastUpdatedDateTime + " onwards data from MSAccess DataBase");
-                    strSqLquery =
-                        "SELECT  Trans.Tid,Trans.CARDID, Trans.Dt,  CBool(Trans.InOut)   FROM Trans WHERE Trans.Dt >#" +
-                        lastUpdatedDateTime + "#";
-                }
-                else
-                {
-                    WriteLogFile(DateTime.Now + ": Processing full data from MSAccess DataBase");
-                    Console.WriteLine(DateTime.Now + ": Processing full data from MSAccess DataBase");
-                }
-                OleDbCommand cmd = new OleDbCommand(strSqLquery, conn);
+                OleDbCommand cmd = new OleDbCommand(strSqlquery, conn);
 
                 conn.Open();
 
@@ -126,6 +117,7 @@ namespace LMSTimeSheet
 
                 adapter.Fill(accessResults);
             }
+
             return accessResults;
         }
 
@@ -135,7 +127,6 @@ namespace LMSTimeSheet
                 new SqlConnection(lmsConnection))
             {
                 // make sure to enable triggers
-                // more on triggers in next post
                 SqlBulkCopy bulkCopy =
                     new SqlBulkCopy
                         (
@@ -156,6 +147,13 @@ namespace LMSTimeSheet
             }
         }
 
+        private static void WriteLog(string message)
+        {
+            string formattedmsg = DateTime.Now + ": " + message;
+            Console.WriteLine(formattedmsg);
+            WriteLogFile(formattedmsg);
+        }
+
         private static void WriteLogFile(string formattedMsg)
         {
             try
@@ -166,7 +164,7 @@ namespace LMSTimeSheet
                     File.AppendAllText(path, formattedMsg + Environment.NewLine);
                 }
                 else
-                    Console.WriteLine("Failed to write to log file file for the path  " + formattedMsg + ". ");
+                    Console.WriteLine("Failed to write to log file file for the path  " + path + ".");
             }
             catch (Exception ex)
             {
@@ -175,5 +173,3 @@ namespace LMSTimeSheet
         }
     }
 }
-
-
